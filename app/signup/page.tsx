@@ -17,6 +17,8 @@ import { useToast } from "@/components/ui/use-toast"
 export default function SignUpPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [name, setName] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
   const [otpCode, setOtpCode] = useState('')
   const [showOtpInput, setShowOtpInput] = useState(false)
@@ -25,6 +27,7 @@ export default function SignUpPage() {
   const [showExistingAccountDialog, setShowExistingAccountDialog] = useState(false)
   const [showVerificationDialog, setShowVerificationDialog] = useState(false)
   const [loadingText, setLoadingText] = useState('')
+  const [signupComplete, setSignupComplete] = useState(false)
   const router = useRouter()
   const supabase = createClient()
   const { user } = useAuth()
@@ -42,77 +45,119 @@ export default function SignUpPage() {
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setError(null)
-    setShowVerificationDialog(false)
-    setShowExistingAccountDialog(false)
-
+    e.preventDefault();
+    
+    // Reset state
+    setLoading(true);
+    setError(null);
+    setSignupComplete(false);
+    
     try {
-      await updateLoadingText('Creating your account...', 800)
+      // Form validation
+      if (!email || !password || !confirmPassword) {
+        throw new Error('Please fill in all required fields.');
+      }
       
-      // Try to sign up
-      const { data, error: signUpError } = await supabase.auth.signUp({
+      if (password !== confirmPassword) {
+        throw new Error('Passwords do not match.');
+      }
+      
+      // First, check if user already exists using signInWithPassword
+      console.log("✅ Checking if account already exists...");
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      
+      if (!signInError) {
+        // User exists and credentials are correct, redirect to home
+        console.log("✅ Account exists and credentials are correct, redirecting...");
+        setSignupComplete(true);
+        setShowVerificationDialog(false);
+        router.push('/');
+        return;
+      }
+      
+      // If error is not "Invalid login credentials", it's another error
+      if (signInError && !signInError.message.includes("Invalid login credentials")) {
+        console.log("❌ Error checking account:", signInError.message);
+        throw signInError;
+      }
+      
+      // Check if user exists but password is wrong - we'll use admin API indirectly
+      console.log("✅ Creating new account...");
+      
+      // Set up signup parameters
+      const origin = window.location.origin;
+      const redirectTo = `${origin}/auth/callback?next=/`;
+      
+      // Attempt to sign up
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/confirm?next=/`,
+          // Redirect to our callback handler that will ensure the user is logged in
+          emailRedirectTo: redirectTo,
           data: {
+            // Store the user's name in metadata
+            full_name: name || '',
             email_confirm: true
-          }
+          },
+        },
+      });
+      
+      if (error) throw error;
+      
+      const isUserConfirmed = data?.user?.identities?.length === 0;
+      const isEmailVerified = isUserConfirmed || data?.user?.email_confirmed_at;
+      
+      // If user already exists or needs confirmation
+      if (data && (isUserConfirmed || isEmailVerified)) {
+        console.log("✅ User already confirmed, attempting direct sign in...");
+        // Handle case where user confirmed but needs sign in
+        try {
+          await supabase.auth.signInWithPassword({
+            email,
+            password,
+          });
+          router.push('/');
+        } catch (e) {
+          console.error("Error signing in confirmed user:", e);
+          setShowVerificationDialog(true);
         }
-      })
-
-      // Log the response for debugging
-      console.log("Signup response:", data);
-
-      // Handle specific error cases
-      if (signUpError) {
-        console.error("Signup error:", signUpError.message);
-        
-        // Check for existing account errors
-        if (
-          signUpError.message.includes("already registered") || 
-          signUpError.message.includes("already exists") || 
-          signUpError.message.includes("email taken") ||
-          signUpError.message.includes("User already registered")
-        ) {
-          await updateLoadingText('Account already exists...', 500)
-          setShowExistingAccountDialog(true)
-          return
-        }
-        
-        throw signUpError
-      }
-
-      // Check if the user already exists by examining the response
-      // When a user already exists, Supabase might return a user with no identities
-      if (data?.user && (!data.user.identities || data.user.identities.length === 0)) {
-        console.log("Detected existing account from response");
-        await updateLoadingText('Account already exists...', 500)
-        setShowExistingAccountDialog(true)
-        return
-      }
-
-      // Check if signup was successful
-      if (data?.user) {
-        await updateLoadingText('Success! Check your email...', 800)
-        setShowVerificationDialog(true)
       } else {
-        throw new Error('Failed to create account')
+        // New user - show verification dialog
+        console.log("✅ Account created! Email verification required.");
+        setShowVerificationDialog(true);
       }
+      
+      setEmail('');
+      setPassword('');
+      setConfirmPassword('');
+      setName('');
+      setSignupComplete(true);
+      
     } catch (error) {
-      console.error("Catch block error:", error);
-      setError(error instanceof Error ? error.message : 'An error occurred')
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : 'An error occurred',
-        variant: "destructive",
-      })
+      console.error("❌ Signup error:", error);
+      setError(error instanceof Error ? error.message : "An error occurred");
+      
+      // Check if error indicates existing account
+      const errorMessage = error instanceof Error ? error.message : "";
+      if (errorMessage.includes("already exists") || errorMessage.includes("already registered")) {
+        setShowExistingAccountDialog(true);
+      } else {
+        // Show error toast for other errors
+        toast({
+          title: "Error",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      }
+      
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleGoogleSignIn = async () => {
     try {
@@ -260,170 +305,268 @@ export default function SignUpPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col">
-      {/* Background gradient effect */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute w-[120%] h-[120%] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600/30 blur-3xl opacity-50"></div>
-      </div>
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.3 }}
+      className="min-h-screen bg-black text-white flex flex-col"
+    >
+      {/* Background gradient effect - Different color for signup */}
+      <motion.div 
+        className="absolute inset-0 overflow-hidden pointer-events-none"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.2, duration: 0.5 }}
+      >
+        <motion.div 
+          className="absolute w-[120%] h-[120%] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-purple-600/30 blur-3xl"
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 0.5, scale: 1 }}
+          transition={{ delay: 0.3, duration: 0.7 }}
+        />
+      </motion.div>
 
       {/* Back button */}
-      <div className="p-6">
-        <Link href="/" className="inline-flex items-center text-gray-300 hover:text-white">
+      <motion.div 
+        className="p-6"
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1, duration: 0.3 }}
+      >
+        <Link href="/" className="inline-flex items-center text-gray-300 hover:text-white transition-colors duration-200">
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back to Home
         </Link>
-      </div>
+      </motion.div>
 
       <div className="flex-1 flex items-center justify-center p-6 relative">
         {/* Main content */}
-        <div className="w-full max-w-md relative">
-          <div className="absolute -inset-1 bg-blue-500/50 rounded-2xl blur-lg opacity-15" />
-          <Card className="bg-gray-900/70 border-gray-800 relative">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2, duration: 0.4 }}
+          className="w-full max-w-md relative"
+        >
+          <motion.div
+            className="absolute -inset-1 bg-purple-500/50 rounded-2xl blur-lg"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 0.15 }}
+            transition={{ delay: 0.4, duration: 0.6 }}
+          />
+          <Card className="bg-gray-900/70 border-gray-800 relative overflow-hidden">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3, duration: 0.4 }}
+            >
             <CardHeader className="text-center">
-              <CardTitle className="text-2xl">Create an Account</CardTitle>
-              <CardDescription>Join MealShare to make a difference</CardDescription>
+                <motion.div
+                  initial={{ scale: 0.9, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: 0.4, duration: 0.3 }}
+                  className="mx-auto w-16 h-16 bg-purple-500/10 rounded-full flex items-center justify-center mb-4"
+                >
+                  <Mail className="h-8 w-8 text-purple-500" />
+                </motion.div>
+                <CardTitle className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400">
+                  Create Account
+                </CardTitle>
+                <CardDescription>Join MealShare to make a difference</CardDescription>
             </CardHeader>
             <CardContent>
               <Tabs defaultValue="email" className="w-full">
                 <TabsList className="grid w-full grid-cols-2 mb-6">
-                  <TabsTrigger value="email">Email/Password</TabsTrigger>
-                  <TabsTrigger value="phone">Phone Number</TabsTrigger>
+                    <TabsTrigger 
+                      value="email"
+                      className="data-[state=active]:bg-purple-600 data-[state=active]:text-white transition-all duration-200"
+                    >
+                      Email/Password
+                    </TabsTrigger>
+                    <TabsTrigger 
+                      value="phone"
+                      className="data-[state=active]:bg-purple-600 data-[state=active]:text-white transition-all duration-200"
+                    >
+                      Phone Number
+                    </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="email">
-                  <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="space-y-2">
-                      <Input 
-                        type="email" 
-                        placeholder="Email" 
-                        className="bg-gray-800 border-gray-700"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Input 
-                        type="password" 
-                        placeholder="Password" 
-                        className="bg-gray-800 border-gray-700"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        required
-                      />
-                    </div>
-                    {error && (
-                      <div className="text-sm text-red-500">
-                        {error}
-                      </div>
-                    )}
-                    <Button 
-                      type="submit" 
-                      className="w-full bg-blue-600 hover:bg-blue-700 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
-                      disabled={loading}
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={showOtpInput ? 'otp' : 'initial'}
+                      initial={{ opacity: 0, x: showOtpInput ? 20 : -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: showOtpInput ? -20 : 20 }}
+                      transition={{ duration: 0.2 }}
                     >
-                      Create Account
-                    </Button>
-                  </form>
+                <TabsContent value="email">
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                      <div className="space-y-2">
+                            <Input 
+                              type="email" 
+                              placeholder="Email" 
+                              className="bg-gray-800 border-gray-700"
+                              value={email}
+                              onChange={(e) => setEmail(e.target.value)}
+                              required
+                            />
+                      </div>
+                      <div className="space-y-2">
+                            <Input 
+                              type="password" 
+                              placeholder="Password" 
+                              className="bg-gray-800 border-gray-700"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              required
+                            />
+                    </div>
+                    <div className="space-y-2">
+                            <Input 
+                              type="password" 
+                              placeholder="Confirm Password" 
+                              className="bg-gray-800 border-gray-700"
+                              value={confirmPassword}
+                              onChange={(e) => setConfirmPassword(e.target.value)}
+                              required
+                            />
+                    </div>
+                    <div className="space-y-2">
+                            <Input 
+                              type="text" 
+                              placeholder="Name" 
+                              className="bg-gray-800 border-gray-700"
+                              value={name}
+                              onChange={(e) => setName(e.target.value)}
+                              required
+                            />
+                    </div>
+                          {error && (
+                            <div className="text-sm text-red-500">
+                              {error}
+                    </div>
+                          )}
+                          <Button 
+                            type="submit" 
+                            className="w-full bg-purple-600 hover:bg-purple-700 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+                            disabled={loading}
+                          >
+                            Create Account
+                          </Button>
+                        </form>
                 </TabsContent>
 
                 <TabsContent value="phone">
-                  {!showOtpInput ? (
-                    <form onSubmit={handleSendPhoneOtp} className="space-y-4">
-                      <div className="space-y-2">
-                        <Input 
-                          type="tel" 
-                          placeholder="Phone Number (e.g. +1234567890)" 
-                          className="bg-gray-800 border-gray-700"
-                          value={phoneNumber}
-                          onChange={(e) => setPhoneNumber(e.target.value)}
-                          required
-                        />
-                        <p className="text-gray-400 text-xs">Format: +[country code][number], e.g., +12025550123</p>
-                      </div>
-                      {error && (
-                        <div className="text-sm text-red-500">
-                          {error}
-                        </div>
-                      )}
-                      <Button 
-                        type="submit" 
-                        className="w-full bg-blue-600 hover:bg-blue-700 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
-                        disabled={loading}
-                      >
-                        Send Verification Code
-                      </Button>
-                    </form>
-                  ) : (
-                    <form onSubmit={handleVerifyOtp} className="space-y-4">
-                      <div className="space-y-2">
-                        <div className="rounded-md bg-gray-800/50 p-3 border border-gray-700">
-                          <p className="text-sm text-gray-300 mb-1">Verification code sent to:</p>
-                          <p className="text-blue-400 font-medium">{formatPhoneNumber(phoneNumber)}</p>
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <Input 
-                          type="text" 
-                          placeholder="Enter verification code" 
-                          className="bg-gray-800 border-gray-700 text-center text-lg tracking-wider"
-                          value={otpCode}
-                          onChange={(e) => setOtpCode(e.target.value)}
-                          required
-                          maxLength={6}
-                        />
-                      </div>
-                      {error && (
-                        <div className="text-sm text-red-500">
-                          {error}
-                        </div>
-                      )}
-                      <Button 
-                        type="submit" 
-                        className="w-full bg-blue-600 hover:bg-blue-700 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
-                        disabled={loading}
-                      >
-                        Verify & Create Account
-                      </Button>
-                      <div className="flex justify-between items-center pt-2">
-                        <Button 
-                          type="button" 
-                          variant="link" 
-                          className="text-sm text-gray-400 hover:text-gray-300 px-0"
-                          onClick={() => setShowOtpInput(false)}
-                        >
-                          Change Phone Number
-                        </Button>
-                        <Button 
-                          type="button" 
-                          variant="link" 
-                          className="text-sm text-blue-400 hover:text-blue-300 px-0"
-                          onClick={handleSendPhoneOtp}
-                          disabled={loading}
-                        >
-                          Resend Code
-                        </Button>
-                      </div>
-                    </form>
-                  )}
+                        {!showOtpInput ? (
+                          <form onSubmit={handleSendPhoneOtp} className="space-y-4">
+                            <div className="space-y-2">
+                              <Input 
+                                type="tel" 
+                                placeholder="Phone Number (e.g. +1234567890)" 
+                                className="bg-gray-800 border-gray-700"
+                                value={phoneNumber}
+                                onChange={(e) => setPhoneNumber(e.target.value)}
+                                required
+                              />
+                              <p className="text-gray-400 text-xs">Format: +[country code][number], e.g., +12025550123</p>
+                            </div>
+                            {error && (
+                              <div className="text-sm text-red-500">
+                                {error}
+                              </div>
+                            )}
+                            <Button 
+                              type="submit" 
+                              className="w-full bg-purple-600 hover:bg-purple-700 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+                              disabled={loading}
+                            >
+                              Send Verification Code
+                            </Button>
+                          </form>
+                        ) : (
+                          <form onSubmit={handleVerifyOtp} className="space-y-4">
+                    <div className="space-y-2">
+                              <div className="rounded-md bg-gray-800/50 p-3 border border-gray-700">
+                                <p className="text-sm text-gray-300 mb-1">Verification code sent to:</p>
+                                <p className="text-purple-400 font-medium">{formatPhoneNumber(phoneNumber)}</p>
+                              </div>
+                    </div>
+                    <div className="space-y-2">
+                              <Input 
+                                type="text" 
+                                placeholder="Enter verification code" 
+                                className="bg-gray-800 border-gray-700 text-center text-lg tracking-wider"
+                                value={otpCode}
+                                onChange={(e) => setOtpCode(e.target.value)}
+                                required
+                                maxLength={6}
+                              />
+                            </div>
+                            {error && (
+                              <div className="text-sm text-red-500">
+                                {error}
+                    </div>
+                            )}
+                            <Button 
+                              type="submit" 
+                              className="w-full bg-purple-600 hover:bg-purple-700 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+                              disabled={loading}
+                            >
+                              Verify & Create Account
+                            </Button>
+                            <div className="flex justify-between items-center pt-2">
+                              <Button 
+                                type="button" 
+                                variant="link" 
+                                className="text-sm text-gray-400 hover:text-gray-300 px-0"
+                                onClick={() => setShowOtpInput(false)}
+                              >
+                                Change Phone Number
+                              </Button>
+                              <Button 
+                                type="button" 
+                                variant="link" 
+                                className="text-sm text-purple-400 hover:text-purple-300 px-0"
+                                onClick={handleSendPhoneOtp}
+                                disabled={loading}
+                              >
+                                Resend Code
+                              </Button>
+                  </div>
+                          </form>
+                        )}
                 </TabsContent>
+                    </motion.div>
+                  </AnimatePresence>
               </Tabs>
 
-              <div className="relative my-6">
+                {/* Divider with animation */}
+                <motion.div 
+                  className="relative my-6"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.5, duration: 0.3 }}
+                >
                 <div className="absolute inset-0 flex items-center">
                   <div className="w-full border-t border-gray-700"></div>
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
                   <span className="bg-gray-900 px-2 text-gray-400">Or continue with</span>
                 </div>
-              </div>
+                </motion.div>
 
-              <div className="grid grid-cols-1 gap-3">
-                <Button 
-                  variant="outline" 
-                  className="bg-gray-800 border-gray-700 hover:bg-gray-700"
-                  onClick={handleGoogleSignIn}
+                {/* Social login buttons with hover animation */}
+                <motion.div 
+                  className="grid grid-cols-1 gap-3"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.6, duration: 0.3 }}
                 >
+                  <Button 
+                    variant="outline" 
+                    className="bg-gray-800 border-gray-700 hover:bg-gray-700 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98]"
+                    onClick={handleGoogleSignIn}
+                  >
                   <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
                     <path
                       d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -445,18 +588,24 @@ export default function SignUpPage() {
                   </svg>
                   Continue with Google
                 </Button>
-              </div>
+                </motion.div>
             </CardContent>
             <CardFooter className="flex flex-col items-center justify-center space-y-2">
-              <div className="text-center text-sm text-gray-400">
+                <motion.div 
+                  className="text-center text-sm text-gray-400"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.7, duration: 0.3 }}
+                >
                 Already have an account?{" "}
-                <Link href="/login" className="text-blue-400 hover:text-blue-300">
-                  Sign in
+                  <Link href="/login" className="text-purple-400 hover:text-purple-300 transition-colors duration-200">
+                    Log in
                 </Link>
-              </div>
+                </motion.div>
             </CardFooter>
+            </motion.div>
           </Card>
-        </div>
+        </motion.div>
       </div>
 
       {/* Loading Overlay */}
@@ -477,7 +626,7 @@ export default function SignUpPage() {
               <div className="flex flex-col items-center gap-4">
                 <div className="relative">
                   <div className="flex items-center justify-center">
-                    <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+                    <Loader2 className="h-8 w-8 text-purple-500 animate-spin" />
                   </div>
                 </div>
                 
@@ -508,14 +657,14 @@ export default function SignUpPage() {
               Account Already Exists
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400 text-center">
-              An account with <span className="text-blue-400">{email}</span> already exists.<br />
+              An account with <span className="text-purple-400">{email}</span> already exists.<br />
               Would you like to sign in instead?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-6 flex flex-col gap-2">
             <AlertDialogAction
               onClick={() => router.push('/login')}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white"
             >
               Go to Login
             </AlertDialogAction>
@@ -533,21 +682,21 @@ export default function SignUpPage() {
       <AlertDialog open={showVerificationDialog} onOpenChange={setShowVerificationDialog}>
         <AlertDialogContent className="bg-gray-900 border-gray-800">
           <AlertDialogHeader>
-            <div className="mx-auto w-12 h-12 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
-              <Mail className="h-6 w-6 text-blue-500" />
+            <div className="mx-auto w-12 h-12 bg-purple-500/10 rounded-full flex items-center justify-center mb-4">
+              <Mail className="h-6 w-6 text-purple-500" />
             </div>
             <AlertDialogTitle className="text-white text-xl text-center">
               Check Your Email
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400 text-center">
-              We've sent a verification link to <span className="text-blue-400">{email}</span>.<br />
+              We've sent a verification link to <span className="text-purple-400">{email}</span>.<br />
               Click the link in your email to complete your registration.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-6 flex flex-col gap-2">
             <AlertDialogAction
               onClick={() => window.open('https://mail.google.com', '_blank')}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white"
             >
               Open Gmail
             </AlertDialogAction>
@@ -560,7 +709,7 @@ export default function SignUpPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </motion.div>
   )
 }
 

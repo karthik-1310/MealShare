@@ -1,18 +1,86 @@
 "use client"
 
 import Link from "next/link"
-import { ArrowLeft, Mail, Phone } from "lucide-react"
+import { ArrowLeft, Mail, Phone, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { motion } from "framer-motion"
 import { useRouter } from 'next/navigation'
 import { useSearchParams } from 'next/navigation'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useState, useEffect } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { useToast } from "@/components/ui/use-toast"
+import { useAuth } from '@/components/auth-provider'
 
 export default function VerifyPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const verifyType = searchParams.get('type') || 'email'
+  const email = searchParams.get('email') || ''
+  const [isVerified, setIsVerified] = useState(false)
+  const [checkingStatus, setCheckingStatus] = useState(true)
+  const supabase = createClient()
+  const { user } = useAuth()
+  const { toast } = useToast()
+  
+  // Check if user is already verified on initial load
+  useEffect(() => {
+    const checkVerificationStatus = async () => {
+      try {
+        // If user is already logged in, they are verified
+        if (user) {
+          setIsVerified(true)
+          setCheckingStatus(false)
+          return
+        }
+        
+        // Otherwise, we need to check with Supabase
+        const { data: { user: userData }, error } = await supabase.auth.getUser()
+        
+        if (userData) {
+          // User exists but we need to check verification status
+          setIsVerified(!!userData.email_confirmed_at)
+        }
+      } catch (error) {
+        console.error("Error checking verification status:", error)
+      } finally {
+        setCheckingStatus(false)
+      }
+    }
+    
+    checkVerificationStatus()
+    
+    // Set up a polling mechanism to check every 5 seconds
+    const interval = setInterval(checkVerificationStatus, 5000)
+    
+    return () => clearInterval(interval)
+  }, [user, supabase])
+  
+  // If user is verified, show success toast and redirect to login
+  useEffect(() => {
+    if (isVerified) {
+      toast({
+        title: "Email Verified!",
+        description: "Your email has been successfully verified. You can now login.",
+      })
+      
+      // Redirect to login page with verified=true
+      if (email) {
+        router.push(`/login?verified=true&email=${encodeURIComponent(email)}`)
+      } else {
+        router.push('/login?verified=true')
+      }
+    }
+  }, [isVerified, email, router, toast])
+  
+  const handleLoginRedirect = () => {
+    // Only pre-fill email when verified
+    if (isVerified && email) {
+      router.push(`/login?email=${encodeURIComponent(email)}`)
+    } else {
+      router.push('/login')
+    }
+  }
 
   return (
     <motion.div
@@ -88,11 +156,13 @@ export default function VerifyPage() {
               >
                 Go Back
               </Button>
-              <Link href="/login">
-                <Button variant="ghost" className="text-gray-300 hover:text-white">
-                  Return to Login
-                </Button>
-              </Link>
+              <Button 
+                variant="ghost" 
+                className="text-gray-300 hover:text-white"
+                onClick={handleLoginRedirect}
+              >
+                Return to Login
+              </Button>
             </CardFooter>
           </Card>
         </motion.div>

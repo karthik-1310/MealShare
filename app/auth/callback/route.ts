@@ -1,48 +1,48 @@
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
 
-export async function GET(request: Request) {
-  const requestUrl = new URL(request.url)
-  const code = requestUrl.searchParams.get('code')
-  const next = requestUrl.searchParams.get('next') ?? '/'
-  const cookieStore = cookies()
-  const supabase = createRouteHandlerClient({ cookies: () => cookieStore })
+export const dynamic = 'force-dynamic'
 
-  if (code) {
-    try {
-      // Exchange the code for a session
-      const { error } = await supabase.auth.exchangeCodeForSession(code)
-      if (error) throw error
-
-      // Get the user's session
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('No session found')
-
-      // Check if this is a new user
-      const isNewUser = session.user.created_at === session.user.last_sign_in_at
-      const provider = session.user.app_metadata.provider
-
-      // For email signups that need verification
-      if (isNewUser && (!provider || provider === 'email')) {
-        return NextResponse.redirect(new URL('/signup/verify', request.url))
-      }
-
-      // For Google sign-ins or returning users
-      const successMessage = isNewUser ? 'Account created successfully!' : 'Welcome back!'
-      const redirectUrl = new URL(next, request.url)
-      redirectUrl.searchParams.set('message', successMessage)
-      return NextResponse.redirect(redirectUrl)
-
-    } catch (error) {
-      console.error('Auth callback error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Authentication failed'
-      return NextResponse.redirect(
-        new URL(`/login?error=${encodeURIComponent(errorMessage)}`, request.url)
-      )
+export async function GET(request: NextRequest) {
+  console.log('🚀 AUTH CALLBACK ROUTE TRIGGERED:', request.url);
+  
+  try {
+    const requestUrl = new URL(request.url);
+    const code = requestUrl.searchParams.get('code');
+    const next = requestUrl.searchParams.get('next') || '/';
+    
+    console.log('🔍 Callback parameters:', { code: code ? `${code.substring(0, 8)}...` : 'null', next });
+    
+    if (!code) {
+      console.error('❌ No code provided in callback');
+      return NextResponse.redirect(`${requestUrl.origin}/login?error=no_code&message=${encodeURIComponent('Authentication failed: No code provided')}`);
     }
+    
+    // Exchange the code for a session
+    const supabase = createRouteHandlerClient({ cookies });
+    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    
+    if (error) {
+      console.error('❌ Code exchange error:', error.message);
+      return NextResponse.redirect(`${requestUrl.origin}/login?error=auth_error&message=${encodeURIComponent(error.message)}`);
+    }
+    
+    // Success! Get the session to confirm login worked
+    const { data: { session } } = await supabase.auth.getSession();
+    
+    if (session) {
+      console.log('✅ Successfully authenticated user:', session.user.email);
+      
+      // Redirect to the requested page or home
+      return NextResponse.redirect(`${requestUrl.origin}${next}`);
+    } else {
+      console.error('⚠️ Code exchange worked but no session was created');
+      return NextResponse.redirect(`${requestUrl.origin}/login?error=no_session&message=${encodeURIComponent('Authentication successful but no session was created')}`);
+    }
+  } catch (error) {
+    console.error('💥 Authentication callback error:', error);
+    return NextResponse.redirect(`${requestUrl.origin}/login?error=unexpected&message=${encodeURIComponent('An unexpected error occurred during authentication')}`);
   }
-
-  // If no code is present, redirect to login
-  return NextResponse.redirect(new URL('/login', request.url))
 } 
