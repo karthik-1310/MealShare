@@ -1,7 +1,10 @@
 "use client"
 
+import { useEffect } from "react"
+import { useSearchParams } from "next/navigation"
+import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
-import { ArrowUp, Heart } from "lucide-react"
+import { ArrowUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -13,6 +16,20 @@ import CounterAnimation from "@/components/counter-animation"
 import ScrollAnimations from "@/components/scroll-animations"
 
 export default function Home() {
+  const { toast } = useToast()
+  const searchParams = useSearchParams()
+
+  useEffect(() => {
+    // Show success message if present in URL
+    const message = searchParams.get('message')
+    if (message) {
+      toast({
+        title: "Success!",
+        description: message,
+      })
+    }
+  }, [searchParams, toast])
+
   const scrollToListings = () => {
     const listingsSection = document.getElementById('listings')
     if (listingsSection) {
@@ -21,7 +38,7 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white overflow-hidden relative">
+    <div className="min-h-screen bg-black text-white overflow-hidden relative pt-16">
       {/* Background gradient effect */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute w-[120%] h-[120%] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600/30 blur-3xl opacity-50"></div>
@@ -30,50 +47,6 @@ export default function Home() {
       {/* Animations */}
       <CounterAnimation />
       <ScrollAnimations />
-
-      {/* Navigation */}
-      <header className="relative z-10 flex items-center justify-between px-6 py-4 md:px-12 sticky top-0 backdrop-blur-sm bg-black/70">
-        <div className="flex items-center gap-12">
-          <Link href="#" className="flex items-center group">
-            <Heart className="text-blue-500 mr-2 group-hover:scale-110 transition-transform" />
-            <span className="font-semibold text-xl">MealShare</span>
-          </Link>
-          <nav className="hidden md:flex items-center gap-6">
-            <Link
-              href="#how-it-works"
-              className="text-sm md:text-base text-gray-300 hover:text-white transition-colors hover:underline underline-offset-4"
-            >
-              How It Works
-            </Link>
-            <Link
-              href="#listings"
-              className="text-sm md:text-base text-gray-300 hover:text-white transition-colors hover:underline underline-offset-4"
-            >
-              Listings
-            </Link>
-            <Link
-              href="#about"
-              className="text-sm md:text-base text-gray-300 hover:text-white transition-colors hover:underline underline-offset-4"
-            >
-              About
-            </Link>
-            <Link
-              href="#contact"
-              className="text-sm md:text-base text-gray-300 hover:text-white transition-colors hover:underline underline-offset-4"
-            >
-              Contact
-            </Link>
-          </nav>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link href="/login" className="text-sm md:text-base text-gray-300 hover:text-white transition-colors">
-            Login
-          </Link>
-          <Button className="bg-white text-black hover:bg-gray-200 rounded-full text-sm px-4 py-2 font-medium">
-            <Link href="/signup">Sign up</Link>
-          </Button>
-        </div>
-      </header>
 
       {/* Hero Section */}
       <main className="relative z-10">
@@ -104,8 +77,8 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Bento Grid Layout */}
-        <section className="px-6 md:px-12 py-12">
+        {/* Rest of the content */}
+        <div className="container mx-auto px-6 py-12">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* How It Works */}
             <Card className="bg-gray-900/50 border-gray-800 col-span-full fade-in" id="how-it-works">
@@ -125,93 +98,8 @@ export default function Home() {
 
             {/* Top Givers & Bidders Section */}
             <TopGiversSection />
-
-            {/* Stats Card */}
-            <Card className="bg-gray-900/50 border-gray-800 col-span-full fade-in stats-section">
-              <CardContent className="p-0">
-                <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-800">
-                  <div className="p-6 text-center">
-                    <p className="text-3xl font-bold text-blue-500 counter" data-target="5280">
-                      0
-                    </p>
-                    <p className="text-gray-400 mt-1">Meals Shared</p>
-                  </div>
-                  <div className="p-6 text-center">
-                    <p className="text-3xl font-bold text-blue-500 counter" data-target="320">
-                      0
-                    </p>
-                    <p className="text-gray-400 mt-1">Active Donors</p>
-                  </div>
-                  <div className="p-6 text-center">
-                    <p className="text-3xl font-bold text-blue-500 counter" data-target="45">
-                      0
-                    </p>
-                    <p className="text-gray-400 mt-1">Partner Organizations</p>
-                  </div>
-                  <div className="p-6 text-center">
-                    <p className="text-3xl font-bold text-blue-500 counter" data-target="12">
-                      0
-                    </p>
-                    <p className="text-gray-400 mt-1">Cities Covered</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* About Section */}
-            <Card className="bg-gray-900/50 border-gray-800 md:col-span-1 lg:col-span-2 fade-in" id="about">
-              <CardHeader>
-                <CardTitle className="text-2xl">About MealShare</CardTitle>
-                <CardDescription className="text-gray-400">Our mission to reduce food waste</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <p className="text-gray-300">
-                    MealShare is a platform dedicated to reducing food waste by connecting people with surplus food to
-                    those who need it most. We believe that no food should go to waste when there are people in need.
-                  </p>
-                  <p className="text-gray-300">
-                    Our bidding system ensures that food is accessible at minimum prices, making it affordable for
-                    everyone while still valuing the efforts of those who prepare and share it.
-                  </p>
-                </div>
-              </CardContent>
-              <CardFooter className="pt-0">
-                <Button variant="outline" className="hover:bg-blue-600 hover:text-white transition-colors">
-                  Learn More
-                </Button>
-              </CardFooter>
-            </Card>
-
-            {/* Contact Form */}
-            <Card className="bg-gray-900/50 border-gray-800 md:col-span-1 fade-in" id="contact">
-              <CardHeader>
-                <CardTitle className="text-2xl">Contact Us</CardTitle>
-                <CardDescription className="text-gray-400">Get in touch with our team</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form className="space-y-4">
-                  <div>
-                    <Input type="text" placeholder="Name" className="bg-gray-800 border-gray-700" required />
-                  </div>
-                  <div>
-                    <Input type="email" placeholder="Email" className="bg-gray-800 border-gray-700" required />
-                  </div>
-                  <div>
-                    <textarea
-                      className="w-full min-h-[100px] rounded-md border border-gray-700 bg-gray-800 px-3 py-2 text-sm"
-                      placeholder="Your message"
-                      required
-                    ></textarea>
-                  </div>
-                </form>
-              </CardContent>
-              <CardFooter>
-                <Button className="w-full bg-blue-600 hover:bg-blue-700">Send Message</Button>
-              </CardFooter>
-            </Card>
           </div>
-        </section>
+        </div>
 
         {/* CTA Section */}
         <section className="px-6 md:px-12 py-16 text-center relative overflow-hidden fade-in">

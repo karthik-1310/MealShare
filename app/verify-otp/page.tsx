@@ -1,73 +1,112 @@
-import Link from "next/link"
-import { ArrowLeft } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+'use client'
+
+import { useEffect, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { useToast } from '@/components/ui/use-toast'
 
 export default function VerifyOTPPage() {
+  const [otp, setOtp] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const { toast } = useToast()
+  const supabase = createClient()
+
+  useEffect(() => {
+    // Check if we have a token in the URL
+    const token = searchParams.get('token')
+    if (token) {
+      handleEmailVerification(token)
+    }
+  }, [searchParams])
+
+  const handleEmailVerification = async (token: string) => {
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        token_hash: token,
+        type: 'signup',
+      })
+
+      if (error) throw error
+
+      toast({
+        title: "Success!",
+        description: "Your email has been verified successfully.",
+      })
+
+      router.push('/')
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'An error occurred')
+    }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError(null)
+
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        token: otp,
+        type: 'signup',
+      })
+
+      if (error) throw error
+
+      toast({
+        title: "Success!",
+        description: "Your email has been verified successfully.",
+      })
+
+      router.push('/')
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'An error occurred')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col">
-      {/* Background gradient effect */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute w-[120%] h-[120%] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-600/30 blur-3xl opacity-50"></div>
-      </div>
-
-      {/* Back button */}
-      <div className="p-6">
-        <Link href="/login" className="inline-flex items-center text-gray-300 hover:text-white">
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to Login
-        </Link>
-      </div>
-
-      <div className="flex-1 flex items-center justify-center p-6">
-        <Card className="w-full max-w-md bg-gray-900/70 border-gray-800">
-          <CardHeader className="text-center">
-            <CardTitle className="text-2xl">Verify OTP</CardTitle>
-            <CardDescription>Enter the one-time password sent to your phone</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-6">
-              <div className="grid grid-cols-4 gap-4">
-                <Input
-                  type="text"
-                  maxLength={1}
-                  className="bg-gray-800 border-gray-700 text-center text-xl h-16"
-                  inputMode="numeric"
-                />
-                <Input
-                  type="text"
-                  maxLength={1}
-                  className="bg-gray-800 border-gray-700 text-center text-xl h-16"
-                  inputMode="numeric"
-                />
-                <Input
-                  type="text"
-                  maxLength={1}
-                  className="bg-gray-800 border-gray-700 text-center text-xl h-16"
-                  inputMode="numeric"
-                />
-                <Input
-                  type="text"
-                  maxLength={1}
-                  className="bg-gray-800 border-gray-700 text-center text-xl h-16"
-                  inputMode="numeric"
-                />
+    <div className="container flex h-screen w-screen flex-col items-center justify-center">
+      <Card className="w-[350px]">
+        <CardHeader>
+          <CardTitle>Verify Your Email</CardTitle>
+          <CardDescription>
+            Enter the verification code sent to your email
+          </CardDescription>
+        </CardHeader>
+        <form onSubmit={handleSubmit}>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="otp">Verification Code</Label>
+              <Input
+                id="otp"
+                type="text"
+                placeholder="Enter the code"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
+                required
+              />
+            </div>
+            {error && (
+              <div className="text-sm text-red-500">
+                {error}
               </div>
-
-              <Button className="w-full bg-blue-600 hover:bg-blue-700">Verify & Continue</Button>
-            </div>
+            )}
           </CardContent>
-          <CardFooter className="flex flex-col items-center justify-center space-y-2">
-            <div className="text-center text-sm text-gray-400">
-              Didn&apos;t receive the code?{" "}
-              <Link href="#" className="text-blue-400 hover:text-blue-300">
-                Resend OTP
-              </Link>
-            </div>
+          <CardFooter>
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Verifying...' : 'Verify Email'}
+            </Button>
           </CardFooter>
-        </Card>
-      </div>
+        </form>
+      </Card>
     </div>
   )
 }
