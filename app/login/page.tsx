@@ -403,11 +403,12 @@ export default function LoginPage() {
     attemptAutoLogin();
   }, [email, supabase.auth]);
 
-  // Redirect if already logged in
-  if (user) {
-    router.push('/')
-    return null
-  }
+  // Redirect if already logged in - using useEffect to avoid router updates during render
+  useEffect(() => {
+    if (user) {
+      router.push('/');
+    }
+  }, [user, router]);
 
   const updateLoadingText = async (text: string, delay: number) => {
     setLoadingText(text)

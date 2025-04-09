@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogCancel } from "@/components/ui/alert-dialog"
 import { motion, AnimatePresence } from "framer-motion"
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/auth-provider'
@@ -28,16 +28,19 @@ export default function SignUpPage() {
   const [showVerificationDialog, setShowVerificationDialog] = useState(false)
   const [loadingText, setLoadingText] = useState('')
   const [signupComplete, setSignupComplete] = useState(false)
+  const [isTestingConnection, setIsTestingConnection] = useState(false)
+  const [diagnosticResults, setDiagnosticResults] = useState<Record<string, boolean>>({})
   const router = useRouter()
   const supabase = createClient()
   const { user } = useAuth()
   const { toast } = useToast()
 
-  // Redirect if already logged in
-  if (user) {
-    router.push('/')
-    return null
-  }
+  // Redirect if already logged in - using useEffect to avoid router updates during render
+  useEffect(() => {
+    if (user) {
+      router.push('/')
+    }
+  }, [user, router])
 
   const updateLoadingText = async (text: string, delay: number) => {
     setLoadingText(text)
@@ -52,110 +55,327 @@ export default function SignUpPage() {
     setError(null);
     setSignupComplete(false);
     
+    // Quick database connectivity check
     try {
-      // Form validation
-      if (!email || !password || !confirmPassword) {
-        throw new Error('Please fill in all required fields.');
+      setLoadingText('Checking database connection...');
+      const { error } = await supabase.from('user_profiles').select('count', { count: 'exact', head: true });
+      
+      if (error) {
+        console.error('Database connectivity check failed:', error);
+        if (error.message.includes('network') || error.message.includes('timeout') || error.message.includes('connection')) {
+          toast({
+            title: "Database Connection Issue",
+            description: "We're having trouble connecting to our database. Would you like to run a connection test?",
+            variant: "destructive",
+            action: (
+              <Button variant="outline" onClick={testDatabaseConnection} size="sm">
+                Test Connection
+              </Button>
+            )
+          });
+          setLoading(false);
+          setLoadingText('');
+          return;
+        }
       }
-      
-      if (password !== confirmPassword) {
-        throw new Error('Passwords do not match.');
-      }
-      
-      // First, check if user already exists using signInWithPassword
-      console.log("✅ Checking if account already exists...");
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-      
-      if (!signInError) {
-        // User exists and credentials are correct, redirect to home
-        console.log("✅ Account exists and credentials are correct, redirecting...");
-        setSignupComplete(true);
-        setShowVerificationDialog(false);
-        router.push('/');
-        return;
-      }
-      
-      // If error is not "Invalid login credentials", it's another error
-      if (signInError && !signInError.message.includes("Invalid login credentials")) {
-        console.log("❌ Error checking account:", signInError.message);
-        throw signInError;
-      }
-      
-      // Check if user exists but password is wrong - we'll use admin API indirectly
-      console.log("✅ Creating new account...");
-      
-      // Set up signup parameters
-      const origin = window.location.origin;
-      const redirectTo = `${origin}/auth/callback?next=/`;
-      
-      // Attempt to sign up
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          // Redirect to our callback handler that will ensure the user is logged in
-          emailRedirectTo: redirectTo,
-          data: {
-            // Store the user's name in metadata
-            full_name: name || '',
-            email_confirm: true
-          },
-        },
-      });
-      
-      if (error) throw error;
-      
-      const isUserConfirmed = data?.user?.identities?.length === 0;
-      const isEmailVerified = isUserConfirmed || data?.user?.email_confirmed_at;
-      
-      // If user already exists or needs confirmation
-      if (data && (isUserConfirmed || isEmailVerified)) {
-        console.log("✅ User already confirmed, attempting direct sign in...");
-        // Handle case where user confirmed but needs sign in
+    } catch (err) {
+      console.error('Error during initial connectivity check:', err);
+      // Continue with signup anyway - the retry mechanism will handle persistent issues
+    }
+    
+    // Track retry attempts
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    const attemptSignup = async (): Promise<boolean> => {
+      try {
+        // Form validation
+        if (!email || !password || !confirmPassword) {
+          throw new Error('Please fill in all required fields.');
+        }
+        
+        if (password !== confirmPassword) {
+          throw new Error('Passwords do not match.');
+        }
+        
+        // First, check if user already exists using signInWithPassword
+        console.log("✅ Checking if account already exists...");
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+        
+        if (!signInError) {
+          // User exists and credentials are correct, redirect to home
+          console.log("✅ Account exists and credentials are correct, redirecting...");
+          setSignupComplete(true);
+          setShowVerificationDialog(false);
+          router.push('/');
+          return true;
+        }
+        
+        // If error is not "Invalid login credentials", it's another error
+        if (signInError && !signInError.message.includes("Invalid login credentials")) {
+          console.log("❌ Error checking account:", signInError.message);
+          throw signInError;
+        }
+        
+        // Create new account
+        console.log("✅ Creating new account...");
+        
+        // Set up signup parameters
+        const origin = window.location.origin;
+        const redirectTo = `${origin}/auth/callback?next=/`;
+        
+        // Simple direct signup with minimal options to reduce potential errors
+        let signupResponse;
         try {
-          await supabase.auth.signInWithPassword({
+          // Debug logging for signup attempt
+          console.log(`Attempting to sign up user: ${email} with redirectTo: ${redirectTo}`);
+          
+          // Direct signup with Supabase
+          signupResponse = await supabase.auth.signUp({
             email,
             password,
+            options: {
+              emailRedirectTo: redirectTo,
+              data: {
+                full_name: name || ''
+              }
+            },
           });
-          router.push('/');
-        } catch (e) {
-          console.error("Error signing in confirmed user:", e);
-          setShowVerificationDialog(true);
+          
+          // Log the full response for debugging (remove sensitive data)
+          console.log("✅ Signup API response:", JSON.stringify({
+            user: signupResponse.data.user ? {
+              id: signupResponse.data.user.id,
+              email: signupResponse.data.user.email,
+              created_at: signupResponse.data.user.created_at,
+              email_confirmed_at: signupResponse.data.user.email_confirmed_at,
+              identities: signupResponse.data.user.identities ? 
+                `${signupResponse.data.user.identities.length} identities` : 
+                'no identities'
+            } : null,
+            error: signupResponse.error
+          }, null, 2));
+          
+          const { data, error } = signupResponse;
+          
+          if (error) {
+            console.error("❌ Signup error:", error);
+            
+            // Special handling for common Supabase errors
+            if (error.message.includes('email') && error.message.includes('already')) {
+              setShowExistingAccountDialog(true);
+              return false;
+            }
+            
+            throw error;
+          }
+          
+          // Explicitly check if user was created
+          if (!data.user) {
+            console.error("❌ User object is missing from signup response");
+            throw new Error("Failed to create account - no user returned from API");
+          }
+          
+          console.log("✅ Auth signup successful - User ID:", data.user.id);
+          
+          // Wait a moment to ensure auth is propagated
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Try to verify if the user exists in Supabase directly
+          const { data: getUserData, error: getUserError } = await supabase.auth.getUser();
+          console.log("User verification:", getUserError ? "Failed" : "Success", 
+            getUserData?.user ? `User exists with ID ${getUserData.user.id}` : "User not found");
+          
+          // Try to manually create a user profile in case the trigger didn't work
+          try {
+            console.log("Checking if profile exists for user", data.user.id);
+            
+            // First check if profile already exists
+            const { data: existingProfile, error: profileCheckError } = await supabase
+              .from('user_profiles')
+              .select('id')
+              .eq('id', data.user.id)
+              .single();
+              
+            if (profileCheckError) {
+              console.log("ℹ️ No profile found for user, attempting to create manually");
+              
+              // Create profile manually as fallback
+              const { data: newProfile, error: createProfileError } = await supabase
+                .from('user_profiles')
+                .insert([{
+                  id: data.user.id,
+                  role: 'individual', // Default role
+                  full_name: name || null
+                }])
+                .select();
+                
+              if (createProfileError) {
+                console.error("❌ Failed to manually create profile:", createProfileError);
+                
+                // If we can't create the profile, we should log this but not fail the signup
+                toast({
+                  title: "Account Created with Warning",
+                  description: "Your account was created but there was an issue with your profile. Some features may be limited.",
+                  variant: "destructive"
+                });
+              } else {
+                console.log("✅ Manually created user profile:", newProfile);
+              }
+            } else {
+              console.log("✅ User profile already exists:", existingProfile);
+            }
+          } catch (profileError) {
+            console.error("❌ Error managing user profile:", profileError);
+          }
+          
+          // Check if user is already confirmed, being careful with optional chaining
+          // Use type assertions to fix TypeScript errors
+          const user = data.user as { identities?: any[] | undefined; email_confirmed_at?: Date | null };
+          const identitiesExist = Array.isArray(user.identities);
+          const identitiesEmpty = identitiesExist && user.identities!.length === 0;
+          const isUserConfirmed = identitiesEmpty;
+          const isEmailVerified = isUserConfirmed || !!user.email_confirmed_at;
+          
+          // If user already exists or needs confirmation
+          if (data && (isUserConfirmed || isEmailVerified)) {
+            console.log("✅ User already confirmed, attempting direct sign in...");
+            // Handle case where user confirmed but needs sign in
+            try {
+              await supabase.auth.signInWithPassword({
+                email,
+                password,
+              });
+              router.push('/');
+            } catch (e) {
+              console.error("Error signing in confirmed user:", e);
+              setShowVerificationDialog(true);
+            }
+          } else {
+            // New user - show verification dialog with additional information
+            console.log("✅ Account created! Email verification required.");
+            
+            // Add email resend functionality 
+            const handleResendEmail = async () => {
+              setLoading(true);
+              setLoadingText('Resending verification email...');
+              
+              try {
+                const { error } = await supabase.auth.resend({
+                  type: 'signup',
+                  email,
+                });
+                
+                if (error) {
+                  throw error;
+                }
+                
+                toast({
+                  title: "Email Sent",
+                  description: "A new verification email has been sent to your inbox.",
+                });
+              } catch (error) {
+                console.error("Error resending email:", error);
+                toast({
+                  title: "Error",
+                  description: error instanceof Error ? error.message : "Failed to resend verification email",
+                  variant: "destructive",
+                });
+              } finally {
+                setLoading(false);
+                setLoadingText('');
+              }
+            };
+            
+            // Update the toast to include a resend button
+            toast({
+              title: "Verification Required",
+              description: `Please check your email (${email}) for a verification link. Check spam folder if needed.`,
+              action: (
+                <Button variant="outline" onClick={handleResendEmail} size="sm">
+                  Resend Email
+                </Button>
+              ),
+            });
+            
+            setShowVerificationDialog(true);
+          }
+          
+          setEmail('');
+          setPassword('');
+          setConfirmPassword('');
+          setName('');
+          setSignupComplete(true);
+          return true;
+          
+        } catch (apiError) {
+          console.error("❌ Signup API error:", apiError);
+          throw apiError;
         }
-      } else {
-        // New user - show verification dialog
-        console.log("✅ Account created! Email verification required.");
-        setShowVerificationDialog(true);
+        
+      } catch (error) {
+        console.error("❌ Signup error:", error);
+        
+        // Check for network or database connectivity issues
+        const errorMessage = error instanceof Error ? error.message : "An error occurred";
+        
+        if (errorMessage.includes("database") || 
+            errorMessage.includes("Database") || 
+            errorMessage.includes("network") ||
+            errorMessage.includes("connection") ||
+            errorMessage.includes("timeout")) {
+          
+          // If we haven't exceeded max retries, try again
+          if (retryCount < maxRetries) {
+            retryCount++;
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+            setLoadingText(`Connection issue detected. Retrying (${retryCount}/${maxRetries})...`);
+            return false; // Indicate retry needed
+          } else {
+            // Max retries exceeded
+            toast({
+              title: "Database Connection Error",
+              description: "We're having trouble connecting to our database. Please try again in a few moments.",
+              variant: "destructive",
+              action: (
+                <Button variant="outline" onClick={testDatabaseConnection} size="sm">
+                  Test Connection
+                </Button>
+              )
+            });
+          }
+        } else if (errorMessage.includes("already exists") || errorMessage.includes("already registered")) {
+          setShowExistingAccountDialog(true);
+        } else {
+          // Show error toast for other errors
+          toast({
+            title: "Error",
+            description: errorMessage,
+            variant: "destructive",
+          });
+        }
+        
+        throw error;
       }
-      
-      setEmail('');
-      setPassword('');
-      setConfirmPassword('');
-      setName('');
-      setSignupComplete(true);
-      
-    } catch (error) {
-      console.error("❌ Signup error:", error);
-      setError(error instanceof Error ? error.message : "An error occurred");
-      
-      // Check if error indicates existing account
-      const errorMessage = error instanceof Error ? error.message : "";
-      if (errorMessage.includes("already exists") || errorMessage.includes("already registered")) {
-        setShowExistingAccountDialog(true);
-      } else {
-        // Show error toast for other errors
-        toast({
-          title: "Error",
-          description: errorMessage,
-          variant: "destructive",
-        });
+    };
+    
+    try {
+      let success = false;
+      while (!success && retryCount < maxRetries) {
+        try {
+          success = await attemptSignup();
+        } catch (error) {
+          // If attemptSignup throws, it's a non-retryable error
+          setError(error instanceof Error ? error.message : "An error occurred");
+          break;
+        }
       }
-      
     } finally {
       setLoading(false);
+      setLoadingText('');
     }
   };
 
@@ -302,6 +522,115 @@ export default function SignUpPage() {
     }
     
     return cleaned
+  }
+
+  const testDatabaseConnection = async () => {
+    setIsTestingConnection(true)
+    setLoadingText('Testing database connection...')
+    
+    const results: Record<string, boolean> = {}
+    
+    try {
+      // First test: Simple ping to check basic connectivity
+      const pingStart = Date.now()
+      let pingError = null;
+      
+      try {
+        // Try to use the ping function if it exists
+        const { error } = await supabase.rpc('ping')
+        pingError = error;
+      } catch (e) {
+        // If ping function doesn't exist, try a simpler test
+        console.log("Ping function doesn't exist, trying alternative connection test");
+        
+        try {
+          // Try a simple database query instead
+          const { error } = await supabase.from('user_profiles').select('count', { count: 'exact', head: true });
+          pingError = error;
+        } catch (fallbackError) {
+          console.error("Alternative connection test failed:", fallbackError);
+          pingError = fallbackError instanceof Error ? fallbackError : new Error("Connection test failed");
+        }
+      }
+      
+      const pingTime = Date.now() - pingStart
+      
+      results.basicConnectivity = !pingError
+      console.log(`Database ping: ${pingError ? 'Failed' : 'Success'} (${pingTime}ms)`)
+      
+      if (pingError) {
+        console.error('Database ping error:', pingError)
+        setLoadingText('Database connection failed')
+        throw new Error('Could not connect to database')
+      }
+      
+      setLoadingText('Testing auth service...')
+      
+      // Test auth endpoints
+      const { data: authData, error: authError } = await supabase.auth.getSession()
+      results.authService = !authError
+      
+      if (authError) {
+        console.error('Auth service error:', authError)
+      }
+      
+      // Only proceed with these tests if ping succeeded
+      if (results.basicConnectivity) {
+        setLoadingText('Testing database tables...')
+        
+        // Try a simple query to check if we can access a table
+        const { data: tableData, error: tableError } = await supabase
+          .from('user_profiles')
+          .select('count(*)', { count: 'exact', head: true })
+        
+        results.tableAccess = !tableError
+        
+        if (tableError) {
+          console.error('Table access error:', tableError)
+        }
+      }
+      
+      setDiagnosticResults(results)
+      
+      // If all tests passed, we're good to go
+      if (Object.values(results).every(result => result)) {
+        toast({
+          title: "Connection Test Successful",
+          description: "All database services are working correctly. Please try signing up again.",
+        })
+      } else {
+        // Determine which part is failing
+        if (!results.basicConnectivity) {
+          toast({
+            title: "Database Connection Failed",
+            description: "We can't connect to our database right now. Please try again later.",
+            variant: "destructive",
+          })
+        } else if (!results.authService) {
+          toast({
+            title: "Authentication Service Issue",
+            description: "There's an issue with our authentication service. Please try again later.",
+            variant: "destructive",
+          })
+        } else if (!results.tableAccess) {
+          toast({
+            title: "Database Schema Issue",
+            description: "There's an issue with our database tables. Please contact support.",
+            variant: "destructive",
+          })
+        }
+      }
+    } catch (error) {
+      console.error('Error testing database connection:', error)
+      toast({
+        title: "Connection Test Failed",
+        description: "We couldn't complete the database test. Please try again later.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsTestingConnection(false)
+      setLoadingText('')
+    }
   }
 
   return (
@@ -637,8 +966,12 @@ export default function SignUpPage() {
                   transition={{ duration: 0.2 }}
                   className="text-center"
                 >
-                  <p className="text-lg text-gray-300 font-medium">{loadingText}</p>
-                  <p className="text-sm text-gray-500 mt-1">Please wait...</p>
+                  <p className="text-lg text-gray-300 font-medium">{loadingText || 'Processing'}</p>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {loadingText && loadingText.includes('Retrying') 
+                      ? 'Connection issue detected. Please wait...' 
+                      : 'Please wait...'}
+                  </p>
                 </motion.div>
               </div>
             </motion.div>
@@ -691,15 +1024,67 @@ export default function SignUpPage() {
             <AlertDialogDescription className="text-gray-400 text-center">
               We've sent a verification link to <span className="text-purple-400">{email}</span>.<br />
               Click the link in your email to complete your registration.
+              <div className="mt-4 p-3 bg-gray-800 rounded-md text-sm">
+                <div className="flex items-start text-left mb-2">
+                  <div className="min-w-4 mr-2">1.</div>
+                  <div>Check your <span className="text-purple-400">spam or junk folder</span> if you don't see the email in your inbox</div>
+                </div>
+                <div className="flex items-start text-left mb-2">
+                  <div className="min-w-4 mr-2">2.</div>
+                  <div>Make sure your email address <span className="text-purple-400">{email}</span> is correct</div>
+                </div>
+                <div className="flex items-start text-left">
+                  <div className="min-w-4 mr-2">3.</div>
+                  <div>If you still don't receive it, try the "Resend Email" button below</div>
+                </div>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-6 flex flex-col gap-2">
             <AlertDialogAction
-              onClick={() => window.open('https://mail.google.com', '_blank')}
+              onClick={() => {
+                // Resend verification email
+                const handleResend = async () => {
+                  setLoading(true);
+                  setLoadingText('Resending verification email...');
+                  
+                  try {
+                    const { error } = await supabase.auth.resend({
+                      type: 'signup',
+                      email,
+                    });
+                    
+                    if (error) throw error;
+                    
+                    toast({
+                      title: "Email Resent",
+                      description: "A new verification email has been sent to your inbox.",
+                    });
+                  } catch (error) {
+                    console.error("Error resending email:", error);
+                    toast({
+                      title: "Error",
+                      description: error instanceof Error ? error.message : "Failed to resend verification email",
+                      variant: "destructive",
+                    });
+                  } finally {
+                    setLoading(false);
+                    setLoadingText('');
+                  }
+                };
+                
+                handleResend();
+              }}
               className="w-full bg-purple-600 hover:bg-purple-700 text-white"
             >
-              Open Gmail
+              Resend Verification Email
             </AlertDialogAction>
+            <Button
+              onClick={() => window.open('https://mail.google.com', '_blank')}
+              className="w-full bg-gray-700 hover:bg-gray-600 text-white"
+            >
+              Open Gmail
+            </Button>
             <AlertDialogCancel
               onClick={() => setShowVerificationDialog(false)}
               className="w-full bg-gray-800 hover:bg-gray-700 text-white border-gray-700"

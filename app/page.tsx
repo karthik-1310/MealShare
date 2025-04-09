@@ -1,8 +1,9 @@
 "use client"
 
 import { useEffect } from "react"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/components/ui/use-toast"
+import { useAuth } from "@/components/auth-provider"
 import Link from "next/link"
 import { ArrowUp } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -14,10 +15,13 @@ import FeaturedListings from "@/components/featured-listings"
 import TopGiversSection from "@/components/top-givers-section"
 import CounterAnimation from "@/components/counter-animation"
 import ScrollAnimations from "@/components/scroll-animations"
+import { motion } from "framer-motion"
 
 export default function Home() {
   const { toast } = useToast()
   const searchParams = useSearchParams()
+  const router = useRouter()
+  const { user, profile } = useAuth()
 
   useEffect(() => {
     // Show success message if present in URL
@@ -29,6 +33,51 @@ export default function Home() {
       })
     }
   }, [searchParams, toast])
+
+  // Handle redirects for authenticated users who need to complete onboarding
+  useEffect(() => {
+    // Skip this useEffect if we've recently redirected to prevent infinite loops
+    const redirectFlag = sessionStorage.getItem('redirectAttempted');
+    if (redirectFlag) return;
+    
+    if (user) {
+      // Set a flag to prevent multiple redirects
+      sessionStorage.setItem('redirectAttempted', 'true');
+      
+      // Set a timeout to clear the flag after 5 seconds
+      setTimeout(() => {
+        sessionStorage.removeItem('redirectAttempted');
+      }, 5000);
+      
+      // Only show a toast notification instead of redirecting automatically
+      if (!profile) {
+        console.log("Home page: No profile found, showing notification");
+        toast({
+          title: "Welcome!",
+          description: "Please select your role to get started.",
+        });
+        return;
+      }
+      
+      if (!profile.role) {
+        console.log("Home page: No role selected, showing notification");
+        toast({
+          title: "Role Selection Needed",
+          description: "Please select your role to continue.",
+        });
+        return;
+      }
+      
+      if (profile.role && profile.profile_completed === false) {
+        console.log("Home page: Profile incomplete, showing notification");
+        toast({
+          title: "Profile Update Needed",
+          description: "Please complete your profile to continue.",
+        });
+        return;
+      }
+    }
+  }, [user, profile, router, toast])
 
   const scrollToListings = () => {
     const listingsSection = document.getElementById('listings')
@@ -50,6 +99,27 @@ export default function Home() {
 
       {/* Hero Section */}
       <main className="relative z-10">
+        {/* Show an emergency redirect banner for logged-in users without complete profiles */}
+        {user && (!profile?.role || !profile?.profile_completed) && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-blue-600/30 backdrop-blur-sm p-4 rounded-lg mx-auto max-w-3xl my-4 text-center"
+          >
+            <h2 className="font-bold text-lg mb-2">Complete Your Profile</h2>
+            <p className="mb-3">Please complete your profile setup to get the full MealShare experience.</p>
+            <div className="flex justify-center gap-2">
+              <Link href="/select-role">
+                <Button
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  {!profile?.role ? 'Select Your Role' : 'Complete Your Profile'}
+                </Button>
+              </Link>
+            </div>
+          </motion.div>
+        )}
+      
         <section className="flex flex-col items-center justify-center text-center px-6 pt-16 pb-12 fade-in">
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight max-w-4xl">
             Feeding Hope,

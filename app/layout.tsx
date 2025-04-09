@@ -5,7 +5,8 @@ import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/toaster"
 import { AuthProvider } from "@/components/auth-provider"
-import { Navbar } from "@/components/navbar"
+import Navbar from "@/components/navbar"
+import AuthListener from "@/components/auth-listener"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -25,6 +26,7 @@ export default function RootLayout({
       <body className={inter.className}>
         <AuthProvider>
           <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+            <AuthListener />
             <Navbar />
             {children}
           </ThemeProvider>

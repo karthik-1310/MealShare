@@ -11,9 +11,9 @@ export async function GET(request: NextRequest) {
   try {
     const requestUrl = new URL(request.url);
     const code = requestUrl.searchParams.get('code');
-    const next = requestUrl.searchParams.get('next') || '/';
     
-    console.log('🔍 Callback parameters:', { code: code ? `${code.substring(0, 8)}...` : 'null', next });
+    // Always redirect to select-role after successful authentication
+    console.log('🔍 Callback parameters:', { code: code ? `${code.substring(0, 8)}...` : 'null' });
     
     if (!code) {
       console.error('❌ No code provided in callback');
@@ -22,6 +22,10 @@ export async function GET(request: NextRequest) {
     
     // Exchange the code for a session
     const supabase = createRouteHandlerClient({ cookies });
+    
+    // Debug cookie presence
+    console.log('🍪 Cookies present in request');
+    
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     
     if (error) {
@@ -34,15 +38,22 @@ export async function GET(request: NextRequest) {
     
     if (session) {
       console.log('✅ Successfully authenticated user:', session.user.email);
+      console.log('🔀 Redirecting to role selection page');
       
-      // Redirect to the requested page or home
-      return NextResponse.redirect(`${requestUrl.origin}${next}`);
+      // Create a redirect URL with a timestamp to prevent caching
+      const timestamp = Date.now();
+      const redirectUrl = `${requestUrl.origin}/select-role?t=${timestamp}`;
+      console.log('🔀 Redirect URL:', redirectUrl);
+      
+      // Always redirect to role selection page
+      return NextResponse.redirect(redirectUrl);
     } else {
       console.error('⚠️ Code exchange worked but no session was created');
       return NextResponse.redirect(`${requestUrl.origin}/login?error=no_session&message=${encodeURIComponent('Authentication successful but no session was created')}`);
     }
   } catch (error) {
     console.error('💥 Authentication callback error:', error);
+    const requestUrl = new URL(request.url);
     return NextResponse.redirect(`${requestUrl.origin}/login?error=unexpected&message=${encodeURIComponent('An unexpected error occurred during authentication')}`);
   }
 } 
